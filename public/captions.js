@@ -1,4 +1,7 @@
-const PIPED_APIS = ["https://api.piped.private.coffee"];
+const PIPED_APIS = [
+  "https://pipedapi.ducks.party",
+  "https://api.piped.private.coffee",
+];
 
 const VIDEO_ID = /^[a-zA-Z0-9_-]{11}$/;
 
@@ -160,35 +163,28 @@ function allowedCaptionHost(apiBase, captionUrl) {
   return captionHost === apiHost || captionHost.endsWith(`.${apiHost}`);
 }
 
+async function fetchStreams(api, videoId) {
+  const response = await fetch(`${api}/streams/${videoId}`, {
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error(String(response.status));
+  const data = await response.json();
+  if (!data || typeof data !== "object" || !data.title) {
+    throw new Error(data?.error || "This video is unavailable.");
+  }
+  return { api, data };
+}
+
 async function loadStreams(videoId) {
   if (streamCache?.videoId === videoId) return streamCache;
 
-  let lastError = null;
-  for (const api of PIPED_APIS) {
-    try {
-      const response = await fetch(`${api}/streams/${videoId}`, {
-        signal: AbortSignal.timeout(20000),
-      });
-      if (!response.ok) {
-        lastError = new Error("Couldn’t reach a captions server. Try again in a moment.");
-        continue;
-      }
-      const data = await response.json();
-      if (data?.error && !data.title) {
-        lastError = new Error("This video is unavailable.");
-        continue;
-      }
-      streamCache = { videoId, api, data };
-      return streamCache;
-    } catch (error) {
-      if (error.name === "TimeoutError" || error.name === "AbortError") {
-        lastError = new Error("The captions server took too long to respond. Try again.");
-      } else {
-        lastError = new Error("Couldn’t reach a captions server. Try again in a moment.");
-      }
-    }
+  try {
+    const result = await Promise.any(PIPED_APIS.map((api) => fetchStreams(api, videoId)));
+    streamCache = { videoId, ...result };
+    return streamCache;
+  } catch {
+    throw new Error("Couldn’t reach a captions server. Try again in a moment.");
   }
-  throw lastError || new Error("Couldn’t reach a captions server. Try again in a moment.");
 }
 
 async function fetchTranscriptInBrowser(input, trackId) {
